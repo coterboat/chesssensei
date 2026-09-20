@@ -97,8 +97,54 @@ body {
 .san.active { background: var(--accent); color: #0b1a17; }
 .san.placeholder { cursor: default; color: var(--muted); }
 
-.controls { display: flex; gap: 8px; }
-.controls .btn { flex: 1; }
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.setup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.setup label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.setup select {
+  padding: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+.setup .btn { grid-column: 1 / -1; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #0b1a17; }
+
+.thinking { color: var(--muted); font-weight: 400; }
+
+.elo-chip {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: min(90vw, 520px);
+  padding: 10px 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  z-index: 20;
+}
 
 .btn {
   padding: 9px 12px;

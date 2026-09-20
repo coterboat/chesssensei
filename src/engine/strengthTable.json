@@ -1,0 +1,90 @@
+{
+  "comment": "Sampling temperature per bot Elo for the sub-1350 regime. Fitted by `npm run calibrate` against UCI_Elo 1320/1500/1800 anchors (20 games per pairing); the sub-600 end comes from an extension run pinned at T16=611 (30 games per pairing, noisy, hand-smoothed).",
+  "calibrated": true,
+  "sampleDepth": 8,
+  "points": [
+    {
+      "elo": 400,
+      "temperature": 27
+    },
+    {
+      "elo": 500,
+      "temperature": 22.5
+    },
+    {
+      "elo": 600,
+      "temperature": 16.5
+    },
+    {
+      "elo": 700,
+      "temperature": 12.63
+    },
+    {
+      "elo": 800,
+      "temperature": 10.68
+    },
+    {
+      "elo": 900,
+      "temperature": 9.08
+    },
+    {
+      "elo": 1000,
+      "temperature": 7.85
+    },
+    {
+      "elo": 1100,
+      "temperature": 7.2
+    },
+    {
+      "elo": 1200,
+      "temperature": 6.56
+    },
+    {
+      "elo": 1350,
+      "temperature": 5.81
+    }
+  ],
+  "gamesPerPairing": 20,
+  "measured": [
+    {
+      "temperature": 40,
+      "elo": 179
+    },
+    {
+      "temperature": 28,
+      "elo": 370
+    },
+    {
+      "temperature": 16,
+      "elo": 611
+    },
+    {
+      "temperature": 13,
+      "elo": 681
+    },
+    {
+      "temperature": 10,
+      "elo": 835
+    },
+    {
+      "temperature": 8,
+      "elo": 976
+    },
+    {
+      "temperature": 6.5,
+      "elo": 1209
+    },
+    {
+      "temperature": 5,
+      "elo": 1516
+    },
+    {
+      "temperature": 4,
+      "elo": 1702
+    },
+    {
+      "temperature": 3,
+      "elo": 1996
+    }
+  ]
+}

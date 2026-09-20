@@ -9,6 +9,8 @@ export type Termination =
   | 'threefold'
   | 'fifty-move'
   | 'insufficient'
+  | 'resign'
+  | 'draw-agree'
 
 export interface GameStatus {
   over: boolean
@@ -42,6 +44,8 @@ export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0
 export class GameController {
   private chess: Chess
   private startFen: string
+  /** Set when the game ended by agreement rather than by the rules (resign / draw). */
+  private outcome: GameStatus | null = null
 
   constructor(fen: string = START_FEN) {
     this.startFen = fen
@@ -51,6 +55,14 @@ export class GameController {
   reset(fen: string = START_FEN): void {
     this.startFen = fen
     this.chess = new Chess(fen)
+    this.outcome = null
+  }
+
+  /** Ends the game by resignation or agreement. */
+  end(result: NonNullable<GameStatus['result']>, termination: 'resign' | 'draw-agree'): void {
+    if (this.status().over) return
+    this.outcome = { over: true, result, termination }
+    this.chess.setHeader('Result', result)
   }
 
   fen(): string {
@@ -87,6 +99,7 @@ export class GameController {
 
   /** Returns the move if legal, null otherwise. Never throws on illegal input. */
   move(from: string, to: string, promotion?: PromotionPiece): Move | null {
+    if (this.outcome) return null
     try {
       return this.chess.move({ from, to, promotion })
     } catch {
@@ -100,10 +113,12 @@ export class GameController {
   }
 
   undo(): Move | null {
+    this.outcome = null
     return this.chess.undo()
   }
 
   status(): GameStatus {
+    if (this.outcome) return this.outcome
     const c = this.chess
     if (c.isCheckmate()) {
       return { over: true, result: c.turn() === 'w' ? '0-1' : '1-0', termination: 'checkmate' }
@@ -140,6 +155,10 @@ export class GameController {
       dests: status.over ? new Map() : this.dests(),
       status,
     }
+  }
+
+  setHeaders(headers: Record<string, string>): void {
+    for (const [k, v] of Object.entries(headers)) this.chess.setHeader(k, v)
   }
 
   startingFen(): string {
