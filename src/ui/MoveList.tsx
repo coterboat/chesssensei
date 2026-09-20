@@ -6,9 +6,11 @@ interface Props {
   /** Ply currently shown on the board (history.length when live). */
   currentPly: number
   onSelect: (ply: number) => void
+  /** Optional per-ply annotation (review): a colour and a symbol like "??". */
+  annotate?: (ply: number) => { color: string; symbol: string } | undefined
 }
 
-export function MoveList({ history, currentPly, onSelect }: Props) {
+export function MoveList({ history, currentPly, onSelect, annotate }: Props) {
   const active = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     active.current?.scrollIntoView({ block: 'nearest' })
@@ -23,7 +25,9 @@ export function MoveList({ history, currentPly, onSelect }: Props) {
   for (; i < history.length; i += 2) rows.push(history.slice(i, i + 2))
   const firstMoveNo = Number(history[0].fenBefore.split(' ')[5]) || 1
 
-  const cell = (p: PlyRecord) => (
+  const cell = (p: PlyRecord) => {
+    const note = annotate?.(p.ply)
+    return (
     <button
       key={p.ply}
       ref={p.ply === currentPly ? active : undefined}
@@ -32,8 +36,14 @@ export function MoveList({ history, currentPly, onSelect }: Props) {
       onClick={() => onSelect(p.ply)}
     >
       {p.san}
+      {note && (
+        <span className="san-note" style={{ color: note.color }}>
+          {note.symbol}
+        </span>
+      )}
     </button>
-  )
+    )
+  }
 
   return (
     <div className="moves">

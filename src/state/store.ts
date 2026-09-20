@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   GameController,
+  START_FEN,
   type Color,
   type GameSnapshot,
   type PromotionPiece,
@@ -8,10 +9,18 @@ import {
 import { Engine, ENGINE_URL, workerTransport } from '../engine/engine'
 import { BOT_ELO_MAX, BOT_ELO_MIN, chooseBotMove } from '../engine/play'
 import type { Score } from '../engine/uci'
+import { loadOpeningBook } from '../chess/openings'
+import { analyzePositions } from '../engine/analyze'
+import { deleteAllGames, deleteGame, getGame, listGames, saveGame, type GameRecord } from '../persist/db'
+import { expectedAccuracy } from '../review/accuracy'
+import { classifyGame } from '../review/classify'
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from '../persist/settings'
+import { nextBotElo, qualityNudge, unratedReason, updateRating, type BotOffset } from '../review/adaptive'
 
 // The chess.js instance and the engine live outside the store; the store only holds snapshots.
 export const controller = new GameController()
 export const playEngine = new Engine(() => workerTransport())
+export const analysisEngine = new Engine(() => workerTransport())
 
 export type ColorChoice = 'w' | 'b' | 'random'
 export type Opponent = 'engine' | 'human'
@@ -28,6 +37,7 @@ export interface NewGameOptions {
   botElo?: number
   opponent?: Opponent
   fen?: string
+  retry?: { parentId: string; ply: number }
 }
 
 // Draw offers: the engine agrees only in a level, settled position.
@@ -55,6 +65,20 @@ interface AppState {
   takebacks: number
   toast: string | null
 
+  settings: Settings
+  /** Rating outcome of the game that just finished, shown until the next game starts. */
+  lastRating: { before: number; after: number; unrated: string | null } | null
+  savedGames: GameRecord[]
+  screen: 'play' | 'review'
+  reviewId: string | null
+  /** Ply to show when the review screen opens (returning from a retry). */
+  reviewPly: number | null
+  analysisProgress: { id: string; done: number; total: number } | null
+  /** Set while replaying a position from a reviewed game. */
+  retry: { parentId: string; ply: number } | null
+  /** Id of the most recently finished game, for the "Review game" button. */
+  lastGameId: string | null
+
   userMove: (from: string, to: string) => void
   choosePromotion: (piece: PromotionPiece) => void
   cancelPromotion: () => void
@@ -66,6 +90,15 @@ interface AppState {
   setViewPly: (ply: number | null) => void
   stepView: (delta: number) => void
   setToast: (toast: string | null) => void
+  setBotOffset: (offset: BotOffset) => void
+  setBotLock: (elo: number | null) => void
+  resetRating: () => void
+  openReview: (id: string, ply?: number) => void
+  closeReview: () => void
+  startRetry: (record: GameRecord, ply: number) => void
+  analyze: (id: string) => void
+  removeGame: (id: string) => Promise<void>
+  removeAllGames: () => Promise<void>
 }
 
 export const useStore = create<AppState>((set, get) => {
@@ -74,7 +107,76 @@ export const useStore = create<AppState>((set, get) => {
   // The bot's honest evals (its POV) from its most recent moves, for draw offers.
   let botEvals: Score[] = []
 
-  const sync = () => set((s) => ({ game: controller.snapshot(), boardRev: s.boardRev + 1 }))
+  // Guards against saving the same finished game twice.
+  let recorded = false
+
+  const sync = () => {
+    set((s) => ({ game: controller.snapshot(), boardRev: s.boardRev + 1 }))
+    if (get().game.status.over && !recorded) void recordGame()
+  }
+
+  const updateSettings = (patch: Partial<Settings>) => {
+    const settings = { ...get().settings, ...patch }
+    saveSettings(settings)
+    set({ settings })
+  }
+
+  const adaptiveBotElo = (s: Settings) => s.botLock ?? nextBotElo(s.playerElo, s.botOffset, BOT_ELO_MIN, BOT_ELO_MAX)
+
+  const recordGame = async () => {
+    recorded = true
+    const s = get()
+    const { result, termination } = s.game.status
+    if (s.opponent !== 'engine' || !result || !termination || s.game.history.length === 0) return
+
+    const unrated = unratedReason({
+      vsEngine: true,
+      takebacks: s.takebacks,
+      fromStartPosition: controller.startingFen() === START_FEN,
+      plies: s.game.history.length,
+      termination,
+    })
+    const playerWon = (result === '1-0') === (s.playerColor === 'w')
+    const score = result === '1/2-1/2' ? 0.5 : playerWon ? 1 : 0
+    const before = s.settings.playerElo
+    const after = unrated ? before : updateRating(before, s.botElo, score, s.settings.gamesPlayed)
+
+    const record: GameRecord = {
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      playerColor: s.playerColor,
+      botElo: s.botElo,
+      playerEloBefore: before,
+      playerEloAfter: after,
+      rated: !unrated,
+      unratedReason: unrated ?? undefined,
+      timeControl: '-',
+      result,
+      termination,
+      startFen: controller.startingFen(),
+      pgn: controller.pgn(),
+      plies: s.game.history,
+      analysisComplete: false,
+      parentId: s.retry?.parentId,
+      parentPly: s.retry?.ply,
+    }
+
+    if (!unrated) {
+      updateSettings({
+        playerElo: after,
+        gamesPlayed: s.settings.gamesPlayed + 1,
+        ratingHistory: [...s.settings.ratingHistory, { at: record.createdAt, elo: after }].slice(-500),
+      })
+    }
+    set({ lastRating: { before, after, unrated } })
+    try {
+      await saveGame(record)
+      set({ savedGames: await listGames(), lastGameId: record.id })
+      if (!record.parentId) enqueueAnalysis(record.id)
+    } catch (err) {
+      set({ toast: `Could not save game: ${(err as Error).message}` })
+    }
+  }
 
   const botToMove = () => {
     const s = get()
@@ -115,6 +217,77 @@ export const useStore = create<AppState>((set, get) => {
     void maybeBotMove()
   }
 
+  // --- post-game analysis: one game at a time on its own engine ---
+  const queue: string[] = []
+  const cancelled = new Set<string>()
+  let analysing = false
+
+  const enqueueAnalysis = (id: string) => {
+    if (!queue.includes(id)) queue.push(id)
+    void pump()
+  }
+
+  const pump = async () => {
+    if (analysing) return
+    analysing = true
+    try {
+      for (let id = queue.shift(); id; id = queue.shift()) await analyseOne(id)
+    } finally {
+      analysing = false
+      set({ analysisProgress: null })
+    }
+  }
+
+  const analyseOne = async (id: string) => {
+    const record = await getGame(id)
+    if (!record || record.analysisComplete || record.plies.length === 0) return
+    const fens = [record.plies[0].fenBefore, ...record.plies.map((p) => p.fenAfter)]
+    set({ analysisProgress: { id, done: 0, total: fens.length } })
+    try {
+      const evals = await analyzePositions(analysisEngine, fens, {
+        partial: record.evals,
+        shouldCancel: () => cancelled.has(id),
+        onProgress: (done, total, partial) => {
+          set({ analysisProgress: { id, done, total } })
+          // Checkpoint so closing the tab mid-analysis doesn't lose the work.
+          if (done % 8 === 0) void saveGame({ ...record, evals: [...partial] }).catch(() => undefined)
+        },
+      })
+      if (!evals || cancelled.has(id)) return
+
+      const book = record.startFen === START_FEN ? await loadOpeningBook() : undefined
+      const analysis = classifyGame(record.plies, evals, book)
+      const done: GameRecord = { ...record, evals, analysis, analysisComplete: true }
+
+      // Quality-of-play nudge, once, for rated games only.
+      if (record.rated && record.qualityDelta === undefined) {
+        const mine = analysis.accuracy[record.playerColor]
+        done.qualityDelta = qualityNudge(mine, expectedAccuracy(record.playerEloBefore), record.plies.length)
+        done.playerEloAfter = record.playerEloAfter + done.qualityDelta
+        if (done.qualityDelta !== 0) {
+          const s = get().settings
+          const playerElo = s.playerElo + done.qualityDelta
+          updateSettings({ playerElo, ratingHistory: [...s.ratingHistory.slice(0, -1), { at: Date.now(), elo: playerElo }] })
+        }
+      }
+      await saveGame(done)
+      set({ savedGames: await listGames() })
+    } catch (err) {
+      set({ toast: `Analysis failed: ${(err as Error).message}` })
+    }
+  }
+
+  listGames().then(
+    (savedGames) => {
+      set({ savedGames })
+      // Pick up anything a closed tab left unfinished, oldest first.
+      ;[...savedGames].reverse().forEach((g) => !g.analysisComplete && !g.parentId && enqueueAnalysis(g.id))
+    },
+    () => undefined,
+  )
+
+  const initialSettings = loadSettings()
+
   playEngine.onRestart = () => set({ toast: 'Engine crashed and was restarted.' })
   playEngine.init().then(
     () => {
@@ -127,18 +300,28 @@ export const useStore = create<AppState>((set, get) => {
   return {
     game: controller.snapshot(),
     viewPly: null,
-    orientation: 'white',
+    orientation: initialSettings.colorChoice === 'b' ? 'black' : 'white',
     pendingPromotion: null,
     boardRev: 0,
 
     opponent: 'engine',
-    colorChoice: 'w',
-    playerColor: 'w',
-    botElo: 800,
+    colorChoice: initialSettings.colorChoice === 'random' ? 'w' : initialSettings.colorChoice,
+    playerColor: initialSettings.colorChoice === 'b' ? 'b' : 'w',
+    botElo: adaptiveBotElo(initialSettings),
     engineState: 'loading',
     thinking: false,
     takebacks: 0,
     toast: null,
+
+    settings: initialSettings,
+    lastRating: null,
+    savedGames: [],
+    screen: 'play',
+    reviewId: null,
+    reviewPly: null,
+    analysisProgress: null,
+    retry: null,
+    lastGameId: null,
 
     userMove: (from, to) => {
       const s = get()
@@ -167,12 +350,14 @@ export const useStore = create<AppState>((set, get) => {
       const s = get()
       const colorChoice = options.color ?? s.colorChoice
       const opponent = options.opponent ?? s.opponent
-      const botElo = Math.min(BOT_ELO_MAX, Math.max(BOT_ELO_MIN, Math.round(options.botElo ?? s.botElo)))
+      const botElo = Math.min(BOT_ELO_MAX, Math.max(BOT_ELO_MIN, Math.round(options.botElo ?? adaptiveBotElo(s.settings))))
       const playerColor: Color = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
 
       controller.reset(options.fen) // throws on an invalid FEN, before any state changes
       gameToken++
       botEvals = []
+      recorded = false
+      if (!options.retry && colorChoice !== s.settings.colorChoice) updateSettings({ colorChoice })
       playEngine.stop()
       void playEngine.newGame().catch(() => undefined)
 
@@ -187,7 +372,7 @@ export const useStore = create<AppState>((set, get) => {
       })
 
       set({
-        colorChoice,
+        colorChoice: options.retry ? s.colorChoice : colorChoice,
         opponent,
         botElo,
         playerColor,
@@ -196,6 +381,10 @@ export const useStore = create<AppState>((set, get) => {
         pendingPromotion: null,
         thinking: false,
         takebacks: 0,
+        lastRating: null,
+        lastGameId: null,
+        retry: options.retry ?? null,
+        screen: 'play',
       })
       sync()
       void maybeBotMove()
@@ -203,7 +392,7 @@ export const useStore = create<AppState>((set, get) => {
 
     takeback: () => {
       const s = get()
-      if (s.game.history.length === 0) return
+      if (s.game.history.length === 0 || s.game.status.over) return
       gameToken++
       playEngine.stop()
       botEvals = []
@@ -260,6 +449,46 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setToast: (toast) => set({ toast }),
+
+    setBotOffset: (botOffset) => updateSettings({ botOffset }),
+    setBotLock: (botLock) => updateSettings({ botLock }),
+
+    resetRating: () =>
+      updateSettings({
+        playerElo: DEFAULT_SETTINGS.playerElo,
+        gamesPlayed: 0,
+        ratingHistory: [],
+      }),
+
+    openReview: (id, ply) => set({ screen: 'review', reviewId: id, reviewPly: ply ?? null }),
+    closeReview: () => set({ screen: 'play' }),
+
+    startRetry: (record, ply) => {
+      const from = record.plies[ply - 1]
+      if (!from) return
+      get().newGame({
+        fen: from.fenBefore,
+        color: from.color,
+        botElo: record.botElo,
+        opponent: 'engine',
+        retry: { parentId: record.id, ply },
+      })
+    },
+
+    analyze: (id) => enqueueAnalysis(id),
+
+    removeGame: async (id) => {
+      cancelled.add(id)
+      await deleteGame(id)
+      if (get().reviewId === id) set({ screen: 'play', reviewId: null })
+      set({ savedGames: await listGames() })
+    },
+
+    removeAllGames: async () => {
+      get().savedGames.forEach((g) => cancelled.add(g.id))
+      await deleteAllGames()
+      set({ savedGames: [], screen: 'play', reviewId: null })
+    },
   }
 })
 

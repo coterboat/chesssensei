@@ -86,8 +86,11 @@ export class Engine {
           (line, done) => {
             const info = parseInfo(line)
             if (info) {
-              // Bound lines are provisional; don't let one clobber an exact score.
-              if (!info.bound || !byPv.has(info.multipv)) byPv.set(info.multipv, info)
+              // A bound line is the engine's newest opinion (often a refutation found just before
+              // the time limit), so its score wins; its PV is truncated, so keep the fuller one.
+              const prev = byPv.get(info.multipv)
+              const keepPv = info.bound && prev && prev.pv[0] === info.pv[0] && prev.pv.length > info.pv.length
+              byPv.set(info.multipv, keepPv ? { ...info, pv: prev.pv } : info)
               return
             }
             const best = parseBestMove(line)
@@ -97,6 +100,9 @@ export class Engine {
           () => this.post(go.join(' ')),
         )
         const lines = [...byPv.values()].sort((a, b) => a.multipv - b.multipv)
+        // After a late fail-low the move the engine actually commits to may not be line 1.
+        const chosen = lines.findIndex((l) => l.pv[0] === bestmove)
+        if (chosen > 0) lines.unshift(...lines.splice(chosen, 1))
         return { bestmove, lines }
       } finally {
         this.searching = false

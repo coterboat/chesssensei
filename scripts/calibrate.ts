@@ -4,18 +4,17 @@
 //
 // Every temperature level plays the UCI_Elo anchors and its neighbours; ratings are fitted with
 // Bradley-Terry (anchors fixed), then inverted into src/engine/strengthTable.json.
-import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GameController } from '../src/chess/gameController'
-import { Engine, type Transport } from '../src/engine/engine'
+import { Engine } from '../src/engine/engine'
 import { chooseBotMove, type BotMove } from '../src/engine/play'
 import { scoreToCp } from '../src/engine/uci'
+import { nodeTransport } from './nodeTransport'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const ENGINE_JS = join(root, 'node_modules/stockfish/bin/stockfish-19-lite-single.js')
 const TABLE = join(root, 'src/engine/strengthTable.json')
 
 function arg(name: string, fallback: string): string {
@@ -34,26 +33,6 @@ const ADJUDICATE_CP = 900
 const ADJUDICATE_COUNT = 5
 
 type Player = { key: string; kind: 'sample'; temperature: number } | { key: string; kind: 'uci'; elo: number }
-
-function nodeTransport(): Transport {
-  const proc = spawn(process.execPath, [ENGINE_JS], { stdio: ['pipe', 'pipe', 'ignore'] })
-  let buf = ''
-  return {
-    send: (cmd) => proc.stdin.write(cmd + '\n'),
-    onLine: (cb) =>
-      proc.stdout.on('data', (d: Buffer) => {
-        buf += d.toString()
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-        lines.forEach(cb)
-      }),
-    onError: (cb) => {
-      proc.on('error', cb)
-      proc.on('exit', (code) => code && cb(new Error(`engine exited with ${code}`)))
-    },
-    terminate: () => proc.kill(),
-  }
-}
 
 async function moveFor(p: Player, engine: Engine, fen: string): Promise<BotMove> {
   if (p.kind === 'sample') return chooseBotMove(engine, fen, 400, Math.random, { temperature: p.temperature })

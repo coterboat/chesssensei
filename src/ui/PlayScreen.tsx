@@ -1,7 +1,9 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { inspectFen, type GameStatus } from '../chess/gameController'
 import { useStore } from '../state/store'
+import { BOT_OFFSETS, type BotOffset } from '../review/adaptive'
 import { Board } from './Board'
+import { HistoryDrawer } from './HistoryDrawer'
 import { MoveList } from './MoveList'
 import { PromotionPicker } from './PromotionPicker'
 
@@ -24,7 +26,8 @@ function statusText(status: GameStatus, turn: 'w' | 'b', inCheck: boolean): stri
 
 export function PlayScreen() {
   const s = useStore()
-  const { game, viewPly } = s
+  const { viewPly, game, settings } = s
+  const [historyOpen, setHistoryOpen] = useState(false)
   const live = viewPly === null
   const currentPly = viewPly ?? game.history.length
 
@@ -94,7 +97,26 @@ export function PlayScreen() {
           {statusText(game.status, game.turn, game.inCheck)}
           {s.thinking && <span className="thinking"> · thinking…</span>}
           {vsEngine && s.engineState === 'loading' && <span className="thinking"> · loading engine…</span>}
+          {s.lastRating && !s.retry && (
+            <div className="rating-change">
+              {s.lastRating.unrated
+                ? `Unrated — ${s.lastRating.unrated}`
+                : `Rating ${s.lastRating.before} → ${s.lastRating.after} (${s.lastRating.after >= s.lastRating.before ? '+' : ''}${s.lastRating.after - s.lastRating.before})`}
+            </div>
+          )}
         </div>
+        {s.retry && (
+          <button className="btn back-live" onClick={() => s.openReview(s.retry!.parentId, s.retry!.ply)}>
+            Retrying move {Math.ceil(s.retry.ply / 2)} — back to review
+          </button>
+        )}
+        {s.lastGameId && !s.retry && (
+          <button className="btn primary" onClick={() => s.openReview(s.lastGameId!)}>
+            {s.analysisProgress?.id === s.lastGameId
+              ? `Analyzing move ${Math.ceil(s.analysisProgress.done / 2)}/${Math.ceil(s.analysisProgress.total / 2)}… open review`
+              : 'Review game'}
+          </button>
+        )}
         <MoveList history={game.history} currentPly={currentPly} onSelect={s.setViewPly} />
         {!live && (
           <button className="btn back-live" onClick={() => s.setViewPly(null)}>
@@ -104,8 +126,9 @@ export function PlayScreen() {
         <div className="controls">
           <button className="btn" onClick={s.resign} disabled={game.status.over || game.history.length === 0}>Resign</button>
           <button className="btn" onClick={s.offerDraw} disabled={game.status.over || !vsEngine}>Offer draw</button>
-          <button className="btn" onClick={s.takeback} disabled={game.history.length === 0}>Takeback</button>
+          <button className="btn" onClick={s.takeback} disabled={game.status.over || game.history.length === 0} title="Makes the game unrated">Takeback</button>
           <button className="btn" onClick={s.flip} title="Flip board (f)">Flip</button>
+          <button className="btn wide" onClick={() => setHistoryOpen(true)}>History ({s.savedGames.filter((g) => !g.parentId).length})</button>
         </div>
         <form
           className="setup"
@@ -113,10 +136,10 @@ export function PlayScreen() {
             e.preventDefault()
             const f = new FormData(e.currentTarget)
             const who = String(f.get('opponent'))
+            if (who !== 'human') s.setBotLock(who === 'adaptive' ? null : Number(who))
             s.newGame({
               color: f.get('color') as 'w' | 'b' | 'random',
               opponent: who === 'human' ? 'human' : 'engine',
-              botElo: who === 'human' ? undefined : Number(who),
             })
           }}
         >
@@ -130,12 +153,33 @@ export function PlayScreen() {
           </label>
           <label>
             Opponent
-            <select name="opponent" defaultValue={vsEngine ? String(s.botElo) : 'human'}>
+            <select name="opponent" defaultValue={!vsEngine ? 'human' : settings.botLock === null ? 'adaptive' : String(settings.botLock)}>
+              <option value="adaptive">Adaptive bot</option>
               {ELO_CHOICES.map((elo) => (
-                <option key={elo} value={elo}>Bot {elo}</option>
+                <option key={elo} value={elo}>Bot {elo} (locked)</option>
               ))}
               <option value="human">Human (pass & play)</option>
             </select>
+          </label>
+          <label>
+            Adaptive offset
+            <select value={settings.botOffset} onChange={(e) => s.setBotOffset(Number(e.target.value) as BotOffset)}>
+              {BOT_OFFSETS.map((o) => (
+                <option key={o} value={o}>+{o} above me</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            My rating
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                if (confirm('Reset your rating to the starting value? Saved games are kept.')) s.resetRating()
+              }}
+            >
+              Reset ({settings.playerElo})
+            </button>
           </label>
           <button className="btn primary" type="submit">New game</button>
         </form>
@@ -160,6 +204,7 @@ export function PlayScreen() {
           </form>
         </details>
       </aside>
+      {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)} />}
       {s.toast && (
         <div className="toast" role="status" onClick={() => s.setToast(null)}>
           {s.toast}

@@ -3,8 +3,27 @@
 Personal, local-first chess trainer: play a strength-limited Stockfish, get a game review,
 and the bot's rating adapts to how you played. See [PLAN.md](PLAN.md) for the full roadmap.
 
-**Status:** Phase 1 — play against a strength-limited Stockfish (400–2200), choose colour, resign,
-offer draw, takeback, PGN with headers. Review/adaptive rating come next.
+**Status:** Phase 3 — play a strength-limited Stockfish (400–2200), get a full game review, and a
+synthetic rating picks the next bot. Everything is local: games in IndexedDB, rating in localStorage.
+
+## Game review
+
+After every game a second Stockfish worker evaluates each position once (last → first, depth 16 /
+400 ms, MultiPV 2) and the review screen shows: accuracy for both sides, an eval graph, a label
+for every move (Brilliant / Great / Best / Excellent / Good / Book / Inaccuracy / Mistake / Miss /
+Blunder), key moments, the engine's best line, and **Retry from here** against the same bot.
+
+- Labels are based on **win-% lost**, not raw centipawns, so a +9 → +7 move is not a "blunder".
+- Accuracy uses the Lichess curve on win-% loss. "Played like ~X" is a rough estimate, nothing more.
+- Opening names come from the lichess-org/chess-openings dataset (CC0): `node scripts/build-openings.mjs`.
+- `npx tsx scripts/analyze-pgn.ts game.pgn` runs the same review headlessly in the terminal.
+- Review keys: `←/→` step, `↑/↓` start/end, `n` next key moment, `b` best line, `r` retry, `f` flip, `Esc` back.
+- Analysis is checkpointed; if the tab closes mid-analysis it resumes on next load.
+- The coach text is template-based and fully offline. No LLM is involved anywhere.
+
+Rating rules: Elo update vs the bot's nominal rating, K=40 for the first 10 games then 24, start 1400.
+A game is unrated if you used a takeback, started from a custom FEN, or it ended in under 10 moves
+without a checkmate.
 
 ## How bot strength works
 
