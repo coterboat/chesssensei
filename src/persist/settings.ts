@@ -14,6 +14,8 @@ export interface Settings {
   colorChoice: 'w' | 'b' | 'random'
   ratingHistory: RatingPoint[]
   sound: boolean
+  /** Ask the local LLM CLI for a plain-English note on notable moves (needs the Dock app's server). */
+  coach: boolean
   timeControl: string
 }
 
@@ -27,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   colorChoice: 'w',
   ratingHistory: [],
   sound: true,
+  coach: true,
   timeControl: 'off',
 }
 

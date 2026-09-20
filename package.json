@@ -10,7 +10,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "calibrate": "tsx scripts/calibrate.ts"
+    "calibrate": "tsx scripts/calibrate.ts",
+    "app": "zsh scripts/make-app.sh",
+    "serve": "node scripts/serve.mjs"
   },
   "dependencies": {
     "@lichess-org/chessground": "^10.2.0",

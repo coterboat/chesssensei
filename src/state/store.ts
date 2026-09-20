@@ -13,7 +13,9 @@ import { BOT_ELO_MAX, BOT_ELO_MIN, chooseBotMove } from '../engine/play'
 import type { Score } from '../engine/uci'
 import { loadOpeningBook } from '../chess/openings'
 import { analyzePositions } from '../engine/analyze'
-import { deleteAllGames, deleteGame, getGame, listGames, saveGame, type GameRecord } from '../persist/db'
+import { ACCEPT_LOSS, extractCards, grade, type Card } from '../drill/deck'
+import { analyzePosition } from '../engine/analyze'
+import { deleteAllGames, deleteCard, deleteGame, getGame, listCards, listGames, saveCards, saveGame, type GameRecord } from '../persist/db'
 import { expectedAccuracy } from '../review/accuracy'
 import { classifyGame } from '../review/classify'
 import { DEFAULT_SETTINGS, loadLiveGame, loadSettings, saveLiveGame, saveSettings, type Settings } from '../persist/settings'
@@ -75,7 +77,8 @@ interface AppState {
   /** Rating outcome of the game that just finished, shown until the next game starts. */
   lastRating: { before: number; after: number; unrated: string | null } | null
   savedGames: GameRecord[]
-  screen: 'play' | 'review'
+  screen: 'play' | 'review' | 'drill'
+  cards: Card[]
   reviewId: string | null
   /** Ply to show when the review screen opens (returning from a retry). */
   reviewPly: number | null
@@ -106,6 +109,11 @@ interface AppState {
   updateSettings: (patch: Partial<Settings>) => void
   retryEngine: () => void
   importPgn: (pgn: string, playerColor: Color) => Promise<void>
+  openDrill: () => void
+  /** Grades an answer to a drill card and reschedules it. Resolves with the verdict. */
+  answerCard: (card: Card, uci: string) => Promise<{ correct: boolean; loss: number }>
+  removeCard: (id: string) => Promise<void>
+  saveCoachNote: (gameId: string, ply: number, text: string) => Promise<void>
   removeGame: (id: string) => Promise<void>
   removeAllGames: () => Promise<void>
 }
@@ -335,14 +343,26 @@ export const useStore = create<AppState>((set, get) => {
       }
       await saveGame(done)
       set({ savedGames: await listGames() })
+      await harvestCards(done)
     } catch (err) {
       set({ toast: `Analysis failed: ${(err as Error).message}` })
     }
   }
 
+  /** Turns a freshly analyzed game's errors into drill cards (once per game). */
+  const harvestCards = async (record: GameRecord) => {
+    if (record.cardsExtracted || !record.analysisComplete) return
+    const fresh = extractCards(record, get().cards)
+    await saveCards(fresh)
+    await saveGame({ ...record, cardsExtracted: true })
+    set({ cards: [...get().cards, ...fresh], savedGames: await listGames() })
+  }
+
   listGames().then(
-    (savedGames) => {
-      set({ savedGames })
+    async (savedGames) => {
+      set({ savedGames, cards: await listCards() })
+      // Games analyzed before the deck existed.
+      for (const g of [...savedGames].reverse()) await harvestCards(g)
       // Pick up anything a closed tab left unfinished, oldest first.
       ;[...savedGames].reverse().forEach((g) => !g.analysisComplete && !g.parentId && enqueueAnalysis(g.id))
     },
@@ -399,6 +419,7 @@ export const useStore = create<AppState>((set, get) => {
     lastRating: null,
     savedGames: [],
     screen: 'play',
+    cards: [],
     reviewId: null,
     reviewPly: null,
     analysisProgress: null,
@@ -567,6 +588,37 @@ export const useStore = create<AppState>((set, get) => {
     analyze: (id) => enqueueAnalysis(id),
     updateSettings: (patch) => updateSettings(patch),
 
+    openDrill: () => set({ screen: 'drill' }),
+
+    answerCard: async (card, uci) => {
+      let loss = 0
+      if (uci !== card.bestUci) {
+        // Judge the answer on its merits: any move about as good as the engine's counts.
+        const after = new Chess(card.fen)
+        after.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] })
+        const verdict = await analyzePosition(analysisEngine, after.fen())
+        const win = card.side === 'w' ? verdict.winWhite : 100 - verdict.winWhite
+        loss = Math.max(0, card.bestWin - win)
+      }
+      const correct = loss <= ACCEPT_LOSS
+      const graded = grade(card, correct)
+      await saveCards([graded])
+      set({ cards: get().cards.map((c) => (c.id === graded.id ? graded : c)) })
+      return { correct, loss }
+    },
+
+    saveCoachNote: async (gameId, ply, text) => {
+      const record = await getGame(gameId)
+      if (!record) return
+      await saveGame({ ...record, coachNotes: { ...record.coachNotes, [ply]: text } })
+      set({ savedGames: await listGames() })
+    },
+
+    removeCard: async (id) => {
+      await deleteCard(id)
+      set({ cards: get().cards.filter((c) => c.id !== id) })
+    },
+
     retryEngine: () => {
       set({ engineState: 'loading', toast: null })
       playEngine.quit()
@@ -619,13 +671,13 @@ export const useStore = create<AppState>((set, get) => {
       cancelled.add(id)
       await deleteGame(id)
       if (get().reviewId === id) set({ screen: 'play', reviewId: null })
-      set({ savedGames: await listGames() })
+      set({ savedGames: await listGames(), cards: await listCards() })
     },
 
     removeAllGames: async () => {
       get().savedGames.forEach((g) => cancelled.add(g.id))
       await deleteAllGames()
-      set({ savedGames: [], screen: 'play', reviewId: null })
+      set({ savedGames: [], cards: [], screen: 'play', reviewId: null })
     },
   }
 })

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useStore } from './state/store'
+import { dueCards } from './drill/deck'
+import { DrillScreen } from './ui/DrillScreen'
 import { PlayScreen } from './ui/PlayScreen'
 import { ReviewScreen } from './ui/ReviewScreen'
 import { SettingsDrawer } from './ui/SettingsDrawer'
@@ -8,6 +10,8 @@ export default function App() {
   const opponent = useStore((s) => s.opponent)
   const botElo = useStore((s) => s.botElo)
   const screen = useStore((s) => s.screen)
+  const due = useStore((s) => dueCards(s.cards).length)
+  const openDrill = useStore((s) => s.openDrill)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const reviewId = useStore((s) => s.reviewId)
   const reviewPly = useStore((s) => s.reviewPly)
@@ -20,10 +24,13 @@ export default function App() {
         <span className="elo-chips">
           <span className="elo-chip" title="Synthetic rating — not FIDE, not Chess.com">You {playerElo}</span>
           {opponent === 'engine' && <span className="elo-chip">Bot {botElo}</span>}
+          <button className={`elo-chip chip-btn${due > 0 ? ' has-due' : ''}`} onClick={openDrill} title="Drill your own mistakes">
+            Drill{due > 0 ? ` · ${due} due` : ''}
+          </button>
           <button className="elo-chip chip-btn" onClick={() => setSettingsOpen(true)}>Settings</button>
         </span>
       </header>
-      {screen === 'review' ? <ReviewScreen key={`${reviewId}:${reviewPly}`} /> : <PlayScreen />}
+      {screen === 'review' ? <ReviewScreen key={`${reviewId}:${reviewPly}`} /> : screen === 'drill' ? <DrillScreen /> : <PlayScreen />}
       {settingsOpen && <SettingsDrawer onClose={() => setSettingsOpen(false)} />}
     </div>
   )

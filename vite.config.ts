@@ -28,6 +28,7 @@ export default defineConfig({
       },
     }),
   ],
-  server: { port: 5173, strictPort: true },
+  // The coach endpoint lives in scripts/serve.mjs (the Dock app's server); reach it from dev too.
+  server: { port: 5173, strictPort: true, proxy: { '/api': 'http://127.0.0.1:5180' } },
   test: { environment: 'node', include: ['src/**/*.test.ts'] },
 })

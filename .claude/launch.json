@@ -3,9 +3,9 @@
   "configurations": [
     { "name": "dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 },
     {
-      "name": "dev-p4",
+      "name": "dev-test",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "../chesssensei-p4", "run", "dev", "--", "--port", "5174"],
+      "runtimeArgs": ["run", "dev", "--", "--port", "5174"],
       "port": 5174
     }
   ]

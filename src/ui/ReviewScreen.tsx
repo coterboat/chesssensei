@@ -12,6 +12,7 @@ import { Board } from './Board'
 import { MoveList } from './MoveList'
 import { CLASS_META, SUMMARY_ORDER, formatScore } from './review/classMeta'
 import { EvalBar } from './review/EvalBar'
+import { CoachNote } from './review/CoachNote'
 import { EvalGraph } from './review/EvalGraph'
 
 const BEST_LINE_PLIES = 10
@@ -319,6 +320,7 @@ export function ReviewScreen() {
                     </span>
                   </div>
                   <p>{explain(move, mine, analysis.moves[ply - 2])}</p>
+                  <CoachNote record={record} ply={ply} />
                   {moments.find((k) => k.ply === ply) && <p className="moment-tag">{moments.find((k) => k.ply === ply)!.label}</p>}
                 </>
               ) : (

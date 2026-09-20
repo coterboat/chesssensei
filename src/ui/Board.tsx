@@ -42,7 +42,13 @@ export function Board(props: BoardProps) {
         move: (from, to) => onMove.current?.(from, to),
       },
     })
+    // Chessground caches the board's pixel bounds and only refreshes them on window resize. Our
+    // board also changes size when panels around it load (e.g. the review sidebar), which left
+    // pieces and highlights drawn for the old size — visibly off-grid. Re-measure on any resize.
+    const observer = new ResizeObserver(() => api.current?.redrawAll())
+    observer.observe(el.current)
     return () => {
+      observer.disconnect()
       api.current?.destroy()
       api.current = null
     }
