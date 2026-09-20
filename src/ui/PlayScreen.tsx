@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { inspectFen, type GameStatus } from '../chess/gameController'
 import { useStore } from '../state/store'
-import { BOT_OFFSETS, type BotOffset } from '../review/adaptive'
+import { TIME_CONTROLS } from '../chess/clock'
+import { ENGINE_URL } from '../engine/engine'
 import { Board } from './Board'
+import { Clock } from './Clock'
 import { HistoryDrawer } from './HistoryDrawer'
 import { MoveList } from './MoveList'
 import { PromotionPicker } from './PromotionPicker'
@@ -15,9 +17,12 @@ const TERMINATION_TEXT: Record<NonNullable<GameStatus['termination']>, string> =
   insufficient: 'Draw by insufficient material',
   resign: 'Resignation',
   'draw-agree': 'Draw agreed',
+  time: 'Out of time',
 }
 
 const ELO_CHOICES = Array.from({ length: 19 }, (_, i) => 400 + i * 100)
+
+const sideName = (c: 'w' | 'b') => (c === 'w' ? 'White' : 'Black')
 
 function statusText(status: GameStatus, turn: 'w' | 'b', inCheck: boolean): string {
   if (status.over && status.termination) return `${TERMINATION_TEXT[status.termination]} · ${status.result}`
@@ -41,6 +46,8 @@ export function PlayScreen() {
   }, [live, game, currentPly])
 
   const vsEngine = s.opponent === 'engine'
+  const bottomSide = s.orientation === 'white' ? 'w' : 'b'
+  const topSide = bottomSide === 'w' ? 'b' : 'w'
   const movable =
     !live || game.status.over ? undefined : !vsEngine ? 'both' : s.playerColor === 'w' ? 'white' : 'black'
 
@@ -68,6 +75,7 @@ export function PlayScreen() {
   return (
     <main className="play">
       <section className="board-col">
+        {s.clock && <Clock clock={s.clock} side={topSide} label={topSide === s.playerColor || !vsEngine ? sideName(topSide) : `Bot ${s.botElo}`} />}
         <div className="board-frame">
           <Board
             fen={shown.fen}
@@ -90,6 +98,7 @@ export function PlayScreen() {
             />
           )}
         </div>
+        {s.clock && <Clock clock={s.clock} side={bottomSide} label={bottomSide === s.playerColor && vsEngine ? 'You' : sideName(bottomSide)} />}
       </section>
 
       <aside className="side">
@@ -105,6 +114,13 @@ export function PlayScreen() {
             </div>
           )}
         </div>
+        {vsEngine && s.engineState === 'failed' && (
+          <div className="engine-error" role="alert">
+            <strong>The chess engine didn't load.</strong>
+            <span>Expected at <code>{ENGINE_URL}</code>. Run <code>npm install</code> to copy it into <code>public/stockfish/</code>.</span>
+            <button className="btn" onClick={s.retryEngine}>Try again</button>
+          </div>
+        )}
         {s.retry && (
           <button className="btn back-live" onClick={() => s.openReview(s.retry!.parentId, s.retry!.ply)}>
             Retrying move {Math.ceil(s.retry.ply / 2)} — back to review
@@ -126,7 +142,7 @@ export function PlayScreen() {
         <div className="controls">
           <button className="btn" onClick={s.resign} disabled={game.status.over || game.history.length === 0}>Resign</button>
           <button className="btn" onClick={s.offerDraw} disabled={game.status.over || !vsEngine}>Offer draw</button>
-          <button className="btn" onClick={s.takeback} disabled={game.status.over || game.history.length === 0} title="Makes the game unrated">Takeback</button>
+          <button className="btn" onClick={s.takeback} disabled={game.status.over || game.history.length === 0 || s.clock !== null} title={s.clock ? 'No takebacks in timed games' : 'Makes the game unrated'}>Takeback</button>
           <button className="btn" onClick={s.flip} title="Flip board (f)">Flip</button>
           <button className="btn wide" onClick={() => setHistoryOpen(true)}>History ({s.savedGames.filter((g) => !g.parentId).length})</button>
         </div>
@@ -140,6 +156,7 @@ export function PlayScreen() {
             s.newGame({
               color: f.get('color') as 'w' | 'b' | 'random',
               opponent: who === 'human' ? 'human' : 'engine',
+              timeControl: String(f.get('tc')),
             })
           }}
         >
@@ -161,25 +178,13 @@ export function PlayScreen() {
               <option value="human">Human (pass & play)</option>
             </select>
           </label>
-          <label>
-            Adaptive offset
-            <select value={settings.botOffset} onChange={(e) => s.setBotOffset(Number(e.target.value) as BotOffset)}>
-              {BOT_OFFSETS.map((o) => (
-                <option key={o} value={o}>+{o} above me</option>
+          <label className="span-2">
+            Clock
+            <select name="tc" defaultValue={settings.timeControl}>
+              {TIME_CONTROLS.map((tc) => (
+                <option key={tc.id} value={tc.id}>{tc.label}</option>
               ))}
             </select>
-          </label>
-          <label>
-            My rating
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                if (confirm('Reset your rating to the starting value? Saved games are kept.')) s.resetRating()
-              }}
-            >
-              Reset ({settings.playerElo})
-            </button>
           </label>
           <button className="btn primary" type="submit">New game</button>
         </form>

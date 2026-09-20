@@ -21,6 +21,7 @@ export function EvalGraph({ evals, moves, current, keyPlies, onSelect }: Props) 
   const curve = evals.map((e, i) => `${x(i).toFixed(1)},${y(e.winWhite).toFixed(1)}`).join(' L')
 
   return (
+    <div className="eval-graph-wrap">
     <svg
       className="eval-graph"
       viewBox={`0 0 ${W} ${H}`}
@@ -39,21 +40,21 @@ export function EvalGraph({ evals, moves, current, keyPlies, onSelect }: Props) 
         <line key={p} x1={x(p)} x2={x(p)} y1="0" y2={H} className="graph-key" />
       ))}
       <line x1={x(current)} x2={x(current)} y1="0" y2={H} className="graph-cursor" />
+    </svg>
       {moves
         .filter((m) => NOTABLE.has(m.classification))
         .map((m) => (
-          <circle
+          <span
             key={m.ply}
-            cx={x(m.ply)}
-            cy={y(evals[m.ply].winWhite)}
-            r="4"
-            fill={CLASS_META[m.classification].color}
             className="graph-dot"
-            vectorEffect="non-scaling-stroke"
-          >
-            <title>{`${Math.ceil(m.ply / 2)}${m.side === 'w' ? '.' : '…'} ${m.san} — ${CLASS_META[m.classification].label}`}</title>
-          </circle>
+            style={{
+              left: `${(m.ply / n) * 100}%`,
+              top: `${100 - evals[m.ply].winWhite}%`,
+              background: CLASS_META[m.classification].color,
+            }}
+            title={`${Math.ceil(m.ply / 2)}${m.side === 'w' ? '.' : '…'} ${m.san} — ${CLASS_META[m.classification].label}`}
+          />
         ))}
-    </svg>
+    </div>
   )
 }

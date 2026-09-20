@@ -3,8 +3,10 @@
 Personal, local-first chess trainer: play a strength-limited Stockfish, get a game review,
 and the bot's rating adapts to how you played. See [PLAN.md](PLAN.md) for the full roadmap.
 
-**Status:** Phase 3 — play a strength-limited Stockfish (400–2200), get a full game review, and a
-synthetic rating picks the next bot. Everything is local: games in IndexedDB, rating in localStorage.
+**Status:** Phase 4 — play a strength-limited Stockfish (400–2200) with optional clocks and sounds,
+get a full game review, and a synthetic rating picks the next bot. Everything is local: games in
+IndexedDB, rating and the in-progress game in localStorage. `npm run build` produces an installable
+PWA that works offline after the first load (engine, opening book and sounds are precached).
 
 ## Game review
 
@@ -49,3 +51,17 @@ Keys: `←/→` step through moves, `↑/↓` start/live, `f` flip, `q/n/r/b` pi
 
 - The opponent is Stockfish, never an LLM. Ratings shown are synthetic, not FIDE.
 - Licensed GPL-3.0-or-later, as required by Stockfish and Chessground (both GPL-3).
+
+## Assets
+
+Sounds and the app icon were generated with Ludo.ai and post-processed locally:
+
+```bash
+set -a; source .env.local; set +a          # LUDO_API_KEY
+python3 tools/gen_assets.py                 # candidates -> assets-src/ (gitignored)
+python3 tools/install_assets.py . --pick move=2   # trim, normalise, pick -> public/sounds/*.wav
+python3 tools/install_icon.py . 3           # needs Pillow; crops + exports the PWA icon sizes
+```
+
+Generated effects arrive with dead air in front and a long tail, so `install_assets.py` trims to the
+onset and caps each sound's length; without `--pick` it chooses the candidate with the fastest attack.

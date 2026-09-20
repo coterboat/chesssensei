@@ -11,6 +11,7 @@ export type Termination =
   | 'insufficient'
   | 'resign'
   | 'draw-agree'
+  | 'time'
 
 export interface GameStatus {
   over: boolean
@@ -44,7 +45,7 @@ export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0
 export class GameController {
   private chess: Chess
   private startFen: string
-  /** Set when the game ended by agreement rather than by the rules (resign / draw). */
+  /** Set when the game ended off the board rather than by the rules (resign / draw / flag). */
   private outcome: GameStatus | null = null
 
   constructor(fen: string = START_FEN) {
@@ -59,7 +60,7 @@ export class GameController {
   }
 
   /** Ends the game by resignation or agreement. */
-  end(result: NonNullable<GameStatus['result']>, termination: 'resign' | 'draw-agree'): void {
+  end(result: NonNullable<GameStatus['result']>, termination: 'resign' | 'draw-agree' | 'time'): void {
     if (this.status().over) return
     this.outcome = { over: true, result, termination }
     this.chess.setHeader('Result', result)

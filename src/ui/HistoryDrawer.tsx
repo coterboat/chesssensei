@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { GameRecord } from '../persist/db'
 import { useStore } from '../state/store'
 
@@ -16,6 +17,19 @@ export function HistoryDrawer({ onClose }: { onClose: () => void }) {
   const openReview = useStore((s) => s.openReview)
   const removeGame = useStore((s) => s.removeGame)
   const removeAllGames = useStore((s) => s.removeAllGames)
+  const importPgn = useStore((s) => s.importPgn)
+  const [importing, setImporting] = useState(false)
+  const [pgn, setPgn] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const runImport = async (color: 'w' | 'b') => {
+    try {
+      await importPgn(pgn, color)
+      onClose()
+    } catch (err) {
+      setError(`Couldn't read that PGN: ${(err as Error).message}`)
+    }
+  }
 
   return (
     <div className="drawer-backdrop" onClick={onClose}>
@@ -44,7 +58,9 @@ export function HistoryDrawer({ onClose }: { onClose: () => void }) {
                   >
                     <span className={`result ${o.cls}`}>{o.label}</span>
                     <span className="game-main">
-                      {g.playerColor === 'w' ? 'White' : 'Black'} vs Bot {g.botElo}
+                      {g.imported
+                        ? `${g.imported.white} – ${g.imported.black}`
+                        : `${g.playerColor === 'w' ? 'White' : 'Black'} vs Bot ${g.botElo}`}
                       <small>
                         {DATE.format(g.createdAt)} · {moves} {moves === 1 ? 'move' : 'moves'} · {g.termination}
                       </small>
@@ -61,6 +77,28 @@ export function HistoryDrawer({ onClose }: { onClose: () => void }) {
               )
             })}
           </ul>
+        )}
+
+        {importing ? (
+          <div className="import-box">
+            <textarea
+              value={pgn}
+              onChange={(e) => {
+                setPgn(e.target.value)
+                setError(null)
+              }}
+              placeholder="Paste a PGN here (e.g. exported from Chess.com or Lichess)…"
+              rows={7}
+            />
+            {error && <p className="import-error">{error}</p>}
+            <div className="import-actions">
+              <button className="btn primary" disabled={!pgn.trim()} onClick={() => void runImport('w')}>I was White</button>
+              <button className="btn primary" disabled={!pgn.trim()} onClick={() => void runImport('b')}>I was Black</button>
+              <button className="btn" onClick={() => setImporting(false)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn" onClick={() => setImporting(true)}>Import PGN for review</button>
         )}
 
         {games.length > 0 && (

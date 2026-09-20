@@ -26,6 +26,8 @@ export interface GameRecord {
   /** Set on a retry: the game and ply it branched from. Retries are hidden from History. */
   parentId?: string
   parentPly?: number
+  /** Set on games imported from PGN: the names from its headers. */
+  imported?: { white: string; black: string }
 }
 
 interface Schema extends DBSchema {

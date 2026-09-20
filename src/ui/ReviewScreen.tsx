@@ -74,6 +74,7 @@ function explain(m: AnalyzedPly, mine: boolean, prev: AnalyzedPly | undefined): 
 }
 
 function resultText(g: GameRecord): string {
+  if (g.imported) return `${g.imported.white} – ${g.imported.black} · ${g.result}`
   if (g.result === '1/2-1/2') return `Draw · ${g.termination}`
   const won = (g.result === '1-0') === (g.playerColor === 'w')
   return `${won ? 'You won' : 'You lost'} · ${g.termination}`
@@ -245,8 +246,9 @@ export function ReviewScreen() {
           <div>
             <div className="review-title">{resultText(record)}</div>
             <div className="review-sub">
-              {analysis?.opening ? `${analysis.opening.eco} ${analysis.opening.name}` : 'Opening: —'} · vs Bot {record.botElo}
-              {record.rated
+              {analysis?.opening ? `${analysis.opening.eco} ${analysis.opening.name}` : 'Opening: —'}
+              {record.imported ? ' · imported' : ` · vs Bot ${record.botElo}`}
+              {record.imported ? '' : record.rated
                 ? ` · rating ${record.playerEloBefore} → ${record.playerEloAfter}`
                 : ` · unrated (${record.unratedReason})`}
             </div>
@@ -279,7 +281,7 @@ export function ReviewScreen() {
                 <small>played like ~{analysis.estimatedElo[you]}</small>
               </div>
               <div className="acc">
-                <span>Bot {record.botElo}</span>
+                <span>{record.imported ? 'Opponent' : `Bot ${record.botElo}`}</span>
                 <strong>{analysis.accuracy[bot].toFixed(1)}</strong>
                 <small>played like ~{analysis.estimatedElo[bot]}</small>
               </div>
@@ -326,7 +328,7 @@ export function ReviewScreen() {
                 <button className="btn" onClick={toggleLine} disabled={ply === 0} title="b">
                   {line ? 'Back to game' : 'Show best line'}
                 </button>
-                <button className="btn" onClick={retry} disabled={!mine} title="Play this position again against the same bot (r)">
+                <button className="btn" onClick={retry} disabled={!mine || record.botElo < 400} title="Play this position again against the same bot (r)">
                   Retry from here
                 </button>
                 <button className="btn" onClick={nextMoment} disabled={moments.length === 0} title="n">
@@ -350,7 +352,7 @@ export function ReviewScreen() {
 
             <table className="summary">
               <thead>
-                <tr><th>You</th><th /><th>Bot</th></tr>
+                <tr><th>You</th><th /><th>{record.imported ? 'Opp.' : 'Bot'}</th></tr>
               </thead>
               <tbody>
                 {SUMMARY_ORDER.map((c) => (

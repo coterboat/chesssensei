@@ -5,3 +5,5 @@ dist
 .env.*.local
 public/stockfish
 .DS_Store
+assets-src
+__pycache__

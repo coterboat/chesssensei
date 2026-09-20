@@ -1,4 +1,6 @@
+import { Chess } from 'chess.js'
 import { create } from 'zustand'
+import { newClock, press, remaining, stop, timeControl, type ClockState } from '../chess/clock'
 import {
   GameController,
   START_FEN,
@@ -14,7 +16,8 @@ import { analyzePositions } from '../engine/analyze'
 import { deleteAllGames, deleteGame, getGame, listGames, saveGame, type GameRecord } from '../persist/db'
 import { expectedAccuracy } from '../review/accuracy'
 import { classifyGame } from '../review/classify'
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from '../persist/settings'
+import { DEFAULT_SETTINGS, loadLiveGame, loadSettings, saveLiveGame, saveSettings, type Settings } from '../persist/settings'
+import { playSound, setSoundEnabled, soundForSan } from '../ui/sound'
 import { nextBotElo, qualityNudge, unratedReason, updateRating, type BotOffset } from '../review/adaptive'
 
 // The chess.js instance and the engine live outside the store; the store only holds snapshots.
@@ -37,6 +40,7 @@ export interface NewGameOptions {
   botElo?: number
   opponent?: Opponent
   fen?: string
+  timeControl?: string
   retry?: { parentId: string; ply: number }
 }
 
@@ -64,6 +68,8 @@ interface AppState {
   thinking: boolean
   takebacks: number
   toast: string | null
+  timeControlId: string
+  clock: ClockState | null
 
   settings: Settings
   /** Rating outcome of the game that just finished, shown until the next game starts. */
@@ -97,6 +103,9 @@ interface AppState {
   closeReview: () => void
   startRetry: (record: GameRecord, ply: number) => void
   analyze: (id: string) => void
+  updateSettings: (patch: Partial<Settings>) => void
+  retryEngine: () => void
+  importPgn: (pgn: string, playerColor: Color) => Promise<void>
   removeGame: (id: string) => Promise<void>
   removeAllGames: () => Promise<void>
 }
@@ -112,12 +121,65 @@ export const useStore = create<AppState>((set, get) => {
 
   const sync = () => {
     set((s) => ({ game: controller.snapshot(), boardRev: s.boardRev + 1 }))
-    if (get().game.status.over && !recorded) void recordGame()
+    const s = get()
+    if (s.game.status.over) {
+      if (s.clock?.running) set({ clock: stop(s.clock, Date.now()) })
+      saveLiveGame(null)
+      if (!recorded) {
+        playSound('game-end')
+        void recordGame()
+      }
+      return
+    }
+    saveLiveGame(
+      s.game.history.length === 0
+        ? null
+        : {
+            startFen: controller.startingFen(),
+            ucis: s.game.history.map((p) => p.uci),
+            playerColor: s.playerColor,
+            opponent: s.opponent,
+            botElo: s.botElo,
+            takebacks: s.takebacks,
+            timeControl: s.timeControlId,
+            clock: s.clock ? { w: remaining(s.clock, 'w', Date.now()), b: remaining(s.clock, 'b', Date.now()) } : null,
+            retry: s.retry,
+          },
+    )
   }
+
+  /** A move was just made on the controller: sound + clock. */
+  const afterMove = () => {
+    const last = controller.history().at(-1)
+    if (!last) return
+    playSound(soundForSan(last.san))
+    const { clock, timeControlId } = get()
+    if (clock) set({ clock: press(clock, last.color, timeControl(timeControlId).increment, Date.now()) })
+  }
+
+  // Flag fall + low-time warning. The display itself ticks inside the Clock component.
+  let warnedLowTime = false
+  setInterval(() => {
+    const s = get()
+    if (!s.clock?.running || s.game.status.over) return
+    const side = s.clock.running
+    const left = remaining(s.clock, side, Date.now())
+    if (left <= 0) {
+      gameToken++
+      playEngine.stop()
+      controller.end(side === 'w' ? '0-1' : '1-0', 'time')
+      set({ thinking: false, viewPly: null, pendingPromotion: null })
+      sync()
+    } else if (left < 20_000 && side === s.playerColor && !warnedLowTime) {
+      warnedLowTime = true
+      playSound('low-time')
+    }
+  }, 100)
 
   const updateSettings = (patch: Partial<Settings>) => {
     const settings = { ...get().settings, ...patch }
     saveSettings(settings)
+    setSoundEnabled(settings.sound)
     set({ settings })
   }
 
@@ -150,7 +212,7 @@ export const useStore = create<AppState>((set, get) => {
       playerEloAfter: after,
       rated: !unrated,
       unratedReason: unrated ?? undefined,
-      timeControl: '-',
+      timeControl: s.timeControlId === 'off' ? '-' : s.timeControlId,
       result,
       termination,
       startFen: controller.startingFen(),
@@ -196,6 +258,7 @@ export const useStore = create<AppState>((set, get) => {
       if (token !== gameToken) return
       if (move.score) botEvals = [...botEvals, move.score].slice(-DRAW_EVAL_COUNT)
       if (!controller.moveUci(move.uci)) throw new Error(`engine played illegal move ${move.uci}`)
+      afterMove()
       finishIfOver()
       sync()
     } catch (err) {
@@ -287,6 +350,7 @@ export const useStore = create<AppState>((set, get) => {
   )
 
   const initialSettings = loadSettings()
+  setSoundEnabled(initialSettings.sound)
 
   playEngine.onRestart = () => set({ toast: 'Engine crashed and was restarted.' })
   playEngine.init().then(
@@ -297,21 +361,39 @@ export const useStore = create<AppState>((set, get) => {
     (err: Error) => set({ engineState: 'failed', toast: `Engine failed to load (${ENGINE_URL}): ${err.message}` }),
   )
 
+  // Restore a game that was in progress when the tab last closed.
+  const live = loadLiveGame()
+  if (live) {
+    try {
+      controller.reset(live.startFen)
+      for (const uci of live.ucis) if (!controller.moveUci(uci)) throw new Error('bad move')
+    } catch {
+      controller.reset()
+      saveLiveGame(null)
+    }
+  }
+  const restored = live && controller.history().length > 0 ? live : null
+  const restoredClock: ClockState | null = restored?.clock
+    ? { ...restored.clock, running: controller.turn(), since: Date.now() }
+    : null
+
   return {
     game: controller.snapshot(),
     viewPly: null,
-    orientation: initialSettings.colorChoice === 'b' ? 'black' : 'white',
+    orientation: (restored?.playerColor ?? initialSettings.colorChoice) === 'b' ? 'black' : 'white',
     pendingPromotion: null,
     boardRev: 0,
 
-    opponent: 'engine',
+    opponent: restored?.opponent ?? 'engine',
     colorChoice: initialSettings.colorChoice === 'random' ? 'w' : initialSettings.colorChoice,
-    playerColor: initialSettings.colorChoice === 'b' ? 'b' : 'w',
-    botElo: adaptiveBotElo(initialSettings),
+    playerColor: restored?.playerColor ?? (initialSettings.colorChoice === 'b' ? 'b' : 'w'),
+    botElo: restored?.botElo ?? adaptiveBotElo(initialSettings),
     engineState: 'loading',
     thinking: false,
-    takebacks: 0,
+    takebacks: restored?.takebacks ?? 0,
     toast: null,
+    timeControlId: restored?.timeControl ?? 'off',
+    clock: restoredClock,
 
     settings: initialSettings,
     lastRating: null,
@@ -320,7 +402,7 @@ export const useStore = create<AppState>((set, get) => {
     reviewId: null,
     reviewPly: null,
     analysisProgress: null,
-    retry: null,
+    retry: restored?.retry ?? null,
     lastGameId: null,
 
     userMove: (from, to) => {
@@ -331,7 +413,8 @@ export const useStore = create<AppState>((set, get) => {
         set({ pendingPromotion: { from, to, color: controller.turn() } })
         return
       }
-      controller.move(from, to)
+      if (controller.move(from, to)) afterMove()
+      else playSound('illegal', 0.4)
       // Sync even on failure so the board snaps back to the real position.
       afterUserMove()
     },
@@ -339,7 +422,7 @@ export const useStore = create<AppState>((set, get) => {
     choosePromotion: (piece) => {
       const p = get().pendingPromotion
       if (!p) return
-      controller.move(p.from, p.to, piece)
+      if (controller.move(p.from, p.to, piece)) afterMove()
       set({ pendingPromotion: null })
       afterUserMove()
     },
@@ -351,12 +434,15 @@ export const useStore = create<AppState>((set, get) => {
       const colorChoice = options.color ?? s.colorChoice
       const opponent = options.opponent ?? s.opponent
       const botElo = Math.min(BOT_ELO_MAX, Math.max(BOT_ELO_MIN, Math.round(options.botElo ?? adaptiveBotElo(s.settings))))
+      const tcId = options.retry ? 'off' : (options.timeControl ?? s.settings.timeControl)
       const playerColor: Color = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
 
       controller.reset(options.fen) // throws on an invalid FEN, before any state changes
       gameToken++
       botEvals = []
       recorded = false
+      warnedLowTime = false
+      if (!options.retry && tcId !== s.settings.timeControl) updateSettings({ timeControl: tcId })
       if (!options.retry && colorChoice !== s.settings.colorChoice) updateSettings({ colorChoice })
       playEngine.stop()
       void playEngine.newGame().catch(() => undefined)
@@ -383,16 +469,19 @@ export const useStore = create<AppState>((set, get) => {
         takebacks: 0,
         lastRating: null,
         lastGameId: null,
+        timeControlId: tcId,
+        clock: newClock(timeControl(tcId)),
         retry: options.retry ?? null,
         screen: 'play',
       })
       sync()
+      playSound('game-start', 0.5)
       void maybeBotMove()
     },
 
     takeback: () => {
       const s = get()
-      if (s.game.history.length === 0 || s.game.status.over) return
+      if (s.game.history.length === 0 || s.game.status.over || s.clock) return
       gameToken++
       playEngine.stop()
       botEvals = []
@@ -476,6 +565,55 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     analyze: (id) => enqueueAnalysis(id),
+    updateSettings: (patch) => updateSettings(patch),
+
+    retryEngine: () => {
+      set({ engineState: 'loading', toast: null })
+      playEngine.quit()
+      playEngine.init().then(
+        () => {
+          set({ engineState: 'ready' })
+          void maybeBotMove()
+        },
+        (err: Error) => set({ engineState: 'failed', toast: `Engine failed to load (${ENGINE_URL}): ${err.message}` }),
+      )
+    },
+
+    importPgn: async (pgn, playerColor) => {
+      const parsed = new Chess()
+      parsed.loadPgn(pgn) // throws on garbage; the caller shows the message
+      const headers = parsed.getHeaders()
+      const startFen = headers.FEN ?? START_FEN
+      const replay = new GameController(startFen)
+      for (const m of parsed.history({ verbose: true })) replay.moveUci(m.from + m.to + (m.promotion ?? ''))
+      const plies = replay.history()
+      if (plies.length === 0) throw new Error('That PGN has no moves.')
+
+      const status = replay.status()
+      const headerResult = headers.Result === '1-0' || headers.Result === '0-1' || headers.Result === '1/2-1/2' ? headers.Result : undefined
+      const record: GameRecord = {
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        playerColor,
+        botElo: Number(playerColor === 'w' ? headers.BlackElo : headers.WhiteElo) || 0,
+        playerEloBefore: get().settings.playerElo,
+        playerEloAfter: get().settings.playerElo,
+        rated: false,
+        unratedReason: 'imported game',
+        timeControl: headers.TimeControl ?? '-',
+        result: status.result ?? headerResult ?? '1/2-1/2',
+        termination: status.termination ?? (headerResult && headerResult !== '1/2-1/2' ? 'resign' : 'draw-agree'),
+        startFen,
+        pgn,
+        plies,
+        analysisComplete: false,
+        imported: { white: headers.White ?? 'White', black: headers.Black ?? 'Black' },
+      }
+      await saveGame(record)
+      set({ savedGames: await listGames() })
+      enqueueAnalysis(record.id)
+      get().openReview(record.id)
+    },
 
     removeGame: async (id) => {
       cancelled.add(id)
